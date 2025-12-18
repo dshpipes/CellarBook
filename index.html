@@ -8,122 +8,237 @@
     <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-        body { font-family: 'Inter', sans-serif; transition: background-color 0.3s ease; }
+        body { font-family: 'Inter', sans-serif; transition: background-color 0.3s; }
         .dark { background-color: #0f172a; color: #f8fafc; }
-        .dark .bg-white { background-color: #1e293b; border-color: #334155; }
+        .dark .bg-white { background-color: #1e293b; border-color: #334155; color: #f1f5f9; }
         .dark .text-slate-900 { color: #f1f5f9; }
         .dark .text-slate-600 { color: #94a3b8; }
         .dark .border-slate-200 { border-color: #334155; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
     </style>
 </head>
 <body class="min-h-screen bg-slate-50">
-
     <div id="app-container"></div>
 
     <script>
-        // --- Enhanced State Management ---
+        // --- State Management ---
         let items = JSON.parse(localStorage.getItem('tobacco-cellar-app')) || [];
         let activeTab = 'dashboard';
         let searchQuery = '';
         let selectedItem = null;
         let isEditing = false;
         let darkMode = localStorage.getItem('cellar-dark-mode') === 'true';
-        let sortConfig = { key: 'purchaseDate', direction: 'desc' };
 
-        // --- New: Visualizations Logic ---
-        const renderCharts = () => {
-            const ctx = document.getElementById('brandChart');
-            if (!ctx) return;
-
-            const brandCounts = {};
-            items.forEach(i => brandCounts[i.brand] = (brandCounts[i.brand] || 0) + i.weightOz);
-            
-            new Chart(ctx, {
-                type: 'doughnut',
-                data: {
-                    labels: Object.keys(brandCounts),
-                    datasets: [{
-                        data: Object.values(brandCounts),
-                        backgroundColor: ['#b45309', '#0369a1', '#047857', '#7e22ce', '#be123c'],
-                    }]
-                },
-                options: { plugins: { legend: { display: false } }, cutout: '70%' }
-            });
+        const saveState = () => {
+            localStorage.setItem('tobacco-cellar-app', JSON.stringify(items));
+            localStorage.setItem('cellar-dark-mode', darkMode);
         };
 
-        // --- New: Delete Logic ---
+        const calculateEstValue = (item) => {
+            const ageInYears = (new Date() - new Date(item.purchaseDate)) / (1000 * 60 * 60 * 24 * 365);
+            let appreciation = 1 + (ageInYears * 0.05); // Base 5% annual
+
+            // Advanced Rules for Legacy/Rare Brands
+            const rareBrands = ['McClelland', 'Esoterica', 'Germain', 'Penzance', 'Stonehaven'];
+            if (rareBrands.some(b => item.brand.includes(b))) {
+                appreciation += (ageInYears * 0.25); // Bonus 25% for rarity
+            }
+            if (item.type === 'Bulk') appreciation = Math.min(appreciation, 1.5);
+            
+            return (item.cost * item.qty) * appreciation;
+        };
+
+        // --- View Logic ---
+        const renderIcon = (name, size = 20, className = "") => 
+            `<span data-lucide="${name}" data-lucide-size="${size}" class="${className}"></span>`;
+
+        const renderDashboard = () => {
+            const totals = items.reduce((acc, i) => ({
+                spent: acc.spent + (i.cost * i.qty),
+                val: acc.val + calculateEstValue(i),
+                weight: acc.weight + (i.weightOz * i.qty)
+            }), { spent: 0, val: 0, weight: 0 });
+
+            return `
+                <div class="space-y-6 animate-in slide-in-from-bottom-4">
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+                            <p class="text-xs font-bold text-slate-500 uppercase">Portfolio Value</p>
+                            <h3 class="text-3xl font-black text-emerald-600">$${totals.val.toFixed(2)}</h3>
+                            <p class="text-xs text-slate-400 mt-1">Cost Basis: $${totals.spent.toFixed(2)}</p>
+                        </div>
+                        <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 flex items-center justify-between">
+                            <div>
+                                <p class="text-xs font-bold text-slate-500 uppercase">Cellar Mix</p>
+                                <h3 class="text-2xl font-bold">${items.length} Blends</h3>
+                            </div>
+                            <div class="w-16 h-16"><canvas id="brandChart"></canvas></div>
+                        </div>
+                        <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+                            <p class="text-xs font-bold text-slate-500 uppercase">Total Weight</p>
+                            <h3 class="text-2xl font-bold text-slate-800">${(totals.weight / 16).toFixed(2)} lbs</h3>
+                        </div>
+                    </div>
+                </div>
+            `;
+        };
+
+        const renderInventory = () => {
+            const filtered = items.filter(i => 
+                i.brand.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                i.blend.toLowerCase().includes(searchQuery.toLowerCase())
+            );
+
+            return `
+                <div class="space-y-4">
+                    <input type="text" placeholder="Search cellar..." value="${searchQuery}" 
+                        oninput="searchQuery=this.value; renderApp()"
+                        class="w-full p-3 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-amber-500/20" />
+                    
+                    <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                        <table class="w-full text-left">
+                            <thead class="bg-slate-50 border-b">
+                                <tr class="text-xs font-bold text-slate-500 uppercase">
+                                    <th class="p-4">Blend</th>
+                                    <th class="p-4">Qty</th>
+                                    <th class="p-4 text-right">Est. Value</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${filtered.map(i => `
+                                    <tr onclick="selectedItem=items.find(x=>x.id==='${i.id}'); isEditing=false; renderApp()" class="border-b hover:bg-amber-50/30 cursor-pointer transition">
+                                        <td class="p-4">
+                                            <div class="font-bold text-slate-800">${i.blend}</div>
+                                            <div class="text-xs text-slate-500">${i.brand}</div>
+                                        </td>
+                                        <td class="p-4 font-medium text-slate-600">x${i.qty}</td>
+                                        <td class="p-4 text-right font-bold text-emerald-600">$${calculateEstValue(i).toFixed(2)}</td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        };
+
+        const renderDetailModal = () => {
+            if (!selectedItem) return '';
+            const i = selectedItem;
+            
+            return `
+                <div class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div class="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in duration-200">
+                        <div class="p-6 bg-slate-900 text-white flex justify-between items-center">
+                            <div>
+                                <h2 class="text-xl font-bold">${isEditing ? 'Edit Item' : i.blend}</h2>
+                                <p class="text-slate-400 text-sm">${i.brand}</p>
+                            </div>
+                            <button onclick="selectedItem=null; renderApp()">${renderIcon('X')}</button>
+                        </div>
+                        
+                        <div class="p-6 space-y-4">
+                            ${isEditing ? `
+                                <div class="grid grid-cols-2 gap-4">
+                                    <div><label class="text-xs font-bold text-slate-400">QTY</label>
+                                    <input type="number" value="${i.qty}" class="w-full border p-2 rounded" onchange="updateSelected('qty', parseInt(this.value))"></div>
+                                    <div><label class="text-xs font-bold text-slate-400">COST ($)</label>
+                                    <input type="number" step="0.01" value="${i.cost}" class="w-full border p-2 rounded" onchange="updateSelected('cost', parseFloat(this.value))"></div>
+                                </div>
+                            ` : `
+                                <div class="flex justify-between border-b pb-4">
+                                    <span>Quantity: <span class="font-bold">${i.qty}</span></span>
+                                    <span>Current Value: <span class="font-bold text-emerald-600">$${calculateEstValue(i).toFixed(2)}</span></span>
+                                </div>
+                            `}
+                        </div>
+
+                        <div class="p-4 bg-slate-50 flex justify-between gap-2">
+                            <button onclick="deleteItem('${i.id}')" class="text-red-500 px-4 py-2 hover:bg-red-50 rounded-lg">Delete</button>
+                            <div class="flex gap-2">
+                                <button onclick="isEditing=!isEditing; renderApp()" class="px-4 py-2 border rounded-lg">${isEditing ? 'Cancel' : 'Edit'}</button>
+                                ${isEditing ? `<button onclick="saveEdit()" class="px-4 py-2 bg-slate-900 text-white rounded-lg">Save Changes</button>` : ''}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        };
+
+        // --- Actions ---
+        const updateSelected = (key, val) => { selectedItem[key] = val; };
+        const saveEdit = () => {
+            const idx = items.findIndex(x => x.id === selectedItem.id);
+            items[idx] = { ...selectedItem };
+            isEditing = false;
+            saveState();
+            renderApp();
+        };
+
         const deleteItem = (id) => {
-            if(confirm('Are you sure you want to remove this blend from your cellar?')) {
-                items = items.filter(i => i.id !== id);
+            if (confirm("Permanently remove this item?")) {
+                items = items.filter(x => x.id !== id);
                 selectedItem = null;
                 saveState();
                 renderApp();
             }
         };
 
-        // --- UI Helper for Dark Mode ---
-        const toggleDarkMode = () => {
-            darkMode = !darkMode;
-            localStorage.setItem('cellar-dark-mode', darkMode);
-            document.documentElement.classList.toggle('dark', darkMode);
-            renderApp();
-        };
-
-        // --- Table Sorting Logic ---
-        const setSort = (key) => {
-            if (sortConfig.key === key) {
-                sortConfig.direction = sortConfig.direction === 'asc' ? 'desc' : 'asc';
+        const handleAdd = (newItem) => {
+            const existing = items.find(i => i.brand === newItem.brand && i.blend === newItem.blend);
+            if (existing) {
+                existing.qty += 1; // Increment Qty for duplicates
             } else {
-                sortConfig.key = key;
-                sortConfig.direction = 'asc';
+                items.push({ ...newItem, id: Math.random().toString(36).substr(2, 9), qty: 1 });
             }
+            saveState();
             renderApp();
         };
 
-        const getSortedItems = () => {
-            return [...items].sort((a, b) => {
-                let valA = a[sortConfig.key];
-                let valB = b[sortConfig.key];
-                if (sortConfig.key === 'value') {
-                    valA = calculateEstValue(a);
-                    valB = calculateEstValue(b);
-                }
-                return sortConfig.direction === 'asc' ? 
-                    (valA > valB ? 1 : -1) : (valA < valB ? 1 : -1);
+        const renderApp = () => {
+            document.documentElement.classList.toggle('dark', darkMode);
+            const container = document.getElementById('app-container');
+            container.innerHTML = `
+                <div class="max-w-4xl mx-auto p-4 md:p-8 space-y-6">
+                    <header class="flex justify-between items-center">
+                        <h1 class="text-2xl font-black italic">CELLAR<span class="text-amber-600">BOOK</span></h1>
+                        <button onclick="darkMode=!darkMode; saveState(); renderApp()" class="p-2 bg-white dark:bg-slate-800 rounded-full shadow-sm border border-slate-200">
+                            ${renderIcon(darkMode ? 'Sun' : 'Moon')}
+                        </button>
+                    </header>
+                    
+                    <nav class="flex gap-4 border-b border-slate-200">
+                        <button onclick="activeTab='dashboard'; renderApp()" class="pb-2 border-b-2 ${activeTab==='dashboard'?'border-amber-600':'border-transparent'} font-bold">Dashboard</button>
+                        <button onclick="activeTab='inventory'; renderApp()" class="pb-2 border-b-2 ${activeTab==='inventory'?'border-amber-600':'border-transparent'} font-bold">Inventory</button>
+                    </nav>
+
+                    <main>${activeTab === 'dashboard' ? renderDashboard() : renderInventory()}</main>
+                    ${renderDetailModal()}
+                </div>
+            `;
+            lucide.createIcons();
+            if (activeTab === 'dashboard') initChart();
+        };
+
+        const initChart = () => {
+            const ctx = document.getElementById('brandChart');
+            if (!ctx) return;
+            const brands = items.reduce((acc, i) => ({ ...acc, [i.brand]: (acc[i.brand] || 0) + i.qty }), {});
+            new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    datasets: [{
+                        data: Object.values(brands),
+                        backgroundColor: ['#d97706', '#059669', '#2563eb', '#7c3aed', '#db2777'],
+                        borderWidth: 0
+                    }]
+                },
+                options: { cutout: '70%', plugins: { legend: { display: false } } }
             });
         };
 
-        // --- Main Render Function (Add Chart Canvas to Dashboard) ---
-        // (Simplified for brevity - ensure this replaces your existing renderDashboard)
-        const renderDashboard = () => {
-            const stats = getStats();
-            return `
-                <div class="space-y-6 animate-in slide-in-from-bottom-4">
-                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        ${renderStatCard('Wallet', 'Portfolio Value', `$${stats.totalValue.toFixed(2)}`, null, `+$${(stats.totalValue - stats.totalSpent).toFixed(2)} gain`)}
-                        <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 flex items-center justify-between">
-                            <div>
-                                <p class="text-sm font-medium text-slate-500">Brand Mix</p>
-                                <h3 class="text-xl font-bold">${Object.keys(items.reduce((acc, i) => ({...acc, [i.brand]:1}), {})).length} Brands</h3>
-                            </div>
-                            <div class="w-16 h-16"><canvas id="brandChart"></canvas></div>
-                        </div>
-                        ${renderStatCard('Scale', 'Total Weight', `${(stats.totalWeight / 16).toFixed(2)} lbs`)}
-                    </div>
-                    </div>
-            `;
-        };
-
-        // Initialized with Dark Mode check
-        window.onload = () => {
-            if (darkMode) document.documentElement.classList.add('dark');
-            loadState();
-            renderApp();
-            renderCharts();
-        };
-
-        // (Rest of your existing functions like saveState, calculateEstValue, etc.)
+        window.onload = renderApp;
     </script>
 </body>
 </html>

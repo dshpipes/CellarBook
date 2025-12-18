@@ -3,1151 +3,127 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tobacco Cellar Manager</title>
-    <!-- Load Tailwind CSS from CDN -->
+    <title>CellarBook Pro</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Load Lucide Icons Library from CDN -->
     <script src="https://unpkg.com/lucide@latest"></script>
-    <!-- Use Inter font -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        body {
-            font-family: 'Inter', sans-serif;
-            background-color: #f8fafc;
-        }
-        /* Custom scrollbar for better look */
-        .custom-scrollbar::-webkit-scrollbar {
-            width: 8px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb {
-            background-color: #cbd5e1;
-            border-radius: 10px;
-        }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; transition: background-color 0.3s ease; }
+        .dark { background-color: #0f172a; color: #f8fafc; }
+        .dark .bg-white { background-color: #1e293b; border-color: #334155; }
+        .dark .text-slate-900 { color: #f1f5f9; }
+        .dark .text-slate-600 { color: #94a3b8; }
+        .dark .border-slate-200 { border-color: #334155; }
     </style>
 </head>
-<body class="min-h-screen">
+<body class="min-h-screen bg-slate-50">
 
-    <div id="app-container" class="min-h-screen">
-        <!-- Application content will be rendered here -->
-    </div>
+    <div id="app-container"></div>
 
     <script>
-        // --- Global State & Initialization ---
-        
-        // Note: This application uses localStorage for persistence, which is simple for a static HTML file.
-        // For a true collaborative or production app, you would swap this for a cloud database like Firebase Firestore.
-        let items = [];
+        // --- Enhanced State Management ---
+        let items = JSON.parse(localStorage.getItem('tobacco-cellar-app')) || [];
         let activeTab = 'dashboard';
         let searchQuery = '';
         let selectedItem = null;
-        let showReceiptModal = false;
-        let pasteText = '';
-        let showListImportModal = false;
-        let newItem = {
-            type: 'Tin',
-            purchaseDate: new Date().toISOString().split('T')[0],
-            source: 'Manual',
-            brand: '',
-            blend: '',
-            weightOz: 1.76,
-            cost: 0,
-            notes: ''
-        };
-        let isSyncing = false;
-        let syncStatus = 'idle';
+        let isEditing = false;
+        let darkMode = localStorage.getItem('cellar-dark-mode') === 'true';
+        let sortConfig = { key: 'purchaseDate', direction: 'desc' };
 
-        const APP_ID = 'tobacco-cellar-app';
-        
-        // Mock Data
-        const generateId = () => Math.random().toString(36).substr(2, 9);
-        const INITIAL_DATA = [
-            { id: generateId(), brand: 'McClelland', blend: 'Christmas Cheer 2017', type: 'Tin', weightOz: 3.5, purchaseDate: '2017-12-15', cost: 18.00, source: 'Manual', notes: 'Stored in cool dark closet.' },
-            { id: generateId(), brand: 'G.L. Pease', blend: 'Westminster', type: 'Tin', weightOz: 2, purchaseDate: '2023-01-20', cost: 14.50, source: 'SmokingPipes Sync', notes: '' },
-            { id: generateId(), brand: 'Samuel Gawith', blend: 'Full Virginia Flake', type: 'Bulk', weightOz: 1.76, purchaseDate: '2019-06-05', cost: 16.00, source: 'Email Receipt', notes: 'Sugar crystals forming.' }
-        ];
+        // --- New: Visualizations Logic ---
+        const renderCharts = () => {
+            const ctx = document.getElementById('brandChart');
+            if (!ctx) return;
 
-        // --- Utility Functions ---
-
-        const saveState = () => {
-            try {
-                localStorage.setItem(APP_ID, JSON.stringify(items));
-            } catch (error) {
-                console.error("Could not save to localStorage:", error);
-            }
-        };
-
-        const loadState = () => {
-            try {
-                const storedItems = localStorage.getItem(APP_ID);
-                if (storedItems) {
-                    items = JSON.parse(storedItems);
-                } else {
-                    items = INITIAL_DATA;
-                }
-            } catch (error) {
-                console.error("Could not load from localStorage, using initial data.", error);
-                items = INITIAL_DATA;
-            }
-        };
-
-        const calculateEstValue = (item) => {
-            const now = new Date();
-            const purchase = new Date(item.purchaseDate);
-            const ageInYears = (now.getTime() - purchase.getTime()) / (1000 * 60 * 60 * 24 * 365);
+            const brandCounts = {};
+            items.forEach(i => brandCounts[i.brand] = (brandCounts[i.brand] || 0) + i.weightOz);
             
-            let appreciation = 1 + (ageInYears * 0.05);
+            new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: Object.keys(brandCounts),
+                    datasets: [{
+                        data: Object.values(brandCounts),
+                        backgroundColor: ['#b45309', '#0369a1', '#047857', '#7e22ce', '#be123c'],
+                    }]
+                },
+                options: { plugins: { legend: { display: false } }, cutout: '70%' }
+            });
+        };
 
-            if (['McClelland', 'Esoterica', 'Germain'].some(b => item.brand.includes(b))) {
-                appreciation += (ageInYears * 0.30);
+        // --- New: Delete Logic ---
+        const deleteItem = (id) => {
+            if(confirm('Are you sure you want to remove this blend from your cellar?')) {
+                items = items.filter(i => i.id !== id);
+                selectedItem = null;
+                saveState();
+                renderApp();
             }
+        };
 
-            if (item.type === 'Bulk') {
-                appreciation = Math.min(appreciation, 1.5);
+        // --- UI Helper for Dark Mode ---
+        const toggleDarkMode = () => {
+            darkMode = !darkMode;
+            localStorage.setItem('cellar-dark-mode', darkMode);
+            document.documentElement.classList.toggle('dark', darkMode);
+            renderApp();
+        };
+
+        // --- Table Sorting Logic ---
+        const setSort = (key) => {
+            if (sortConfig.key === key) {
+                sortConfig.direction = sortConfig.direction === 'asc' ? 'desc' : 'asc';
+            } else {
+                sortConfig.key = key;
+                sortConfig.direction = 'asc';
             }
-
-            return item.cost * appreciation;
+            renderApp();
         };
 
-        const formatDate = (dateStr) => {
-            return new Date(dateStr).toLocaleDateString('en-US', { 
-                year: 'numeric', 
-                month: 'short', 
-                day: 'numeric' 
-            });
-        };
-
-        const getAgeString = (dateStr) => {
-            const now = new Date();
-            const purchase = new Date(dateStr);
-            const diffTime = Math.abs(now.getTime() - purchase.getTime());
-            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
-            const years = Math.floor(diffDays / 365);
-            const months = Math.floor((diffDays % 365) / 30);
-            
-            if (years > 0) return `${years}y ${months}m`;
-            return `${months}m`;
-        };
-        
-        /**
-         * Converts the inventory data to CSV format and triggers a download.
-         */
-        const exportToCsv = () => {
-            // 1. Define headers
-            const headers = [
-                "ID", "Brand", "Blend", "Type", "Weight (oz)", "Cost ($)", 
-                "Purchase Date", "Source", "Notes", "Estimated Value ($)"
-            ];
-            let csvContent = headers.join(",") + "\n"; // Start with the header row
-
-            // 2. Map data
-            items.forEach(item => {
-                const estValue = calculateEstValue(item).toFixed(2);
-                
-                // Escape notes field for CSV (replace double quotes with two double quotes, enclose in double quotes)
-                const safeNotes = `"${(item.notes || '').replace(/"/g, '""')}"`; 
-
-                const row = [
-                    item.id,
-                    item.brand,
-                    item.blend,
-                    item.type,
-                    item.weightOz,
-                    item.cost.toFixed(2),
-                    item.purchaseDate,
-                    item.source,
-                    safeNotes, 
-                    estValue
-                ];
-                csvContent += row.join(",") + "\n";
-            });
-
-            // 3. Create Blob and download link
-            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-            const url = URL.createObjectURL(blob);
-            
-            // 4. Create a temporary link and trigger download
-            const link = document.createElement("a");
-            link.setAttribute("href", url);
-            link.setAttribute("download", `CellarBook_Backup_${new Date().toISOString().split('T')[0]}.csv`);
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-        };
-
-        // --- Parsing Logic ---
-
-        const parseReceiptText = (text) => {
-            const lines = text.split('\n');
-            const foundItems = [];
-            
-            const dateRegex = /(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})/;
-            let detectedDate = new Date().toISOString().split('T')[0];
-            const dateMatch = text.match(dateRegex);
-            if (dateMatch) {
-                try {
-                    const d = new Date(text.match(dateRegex)[0]);
-                    if (!isNaN(d.getTime())) detectedDate = d.toISOString().split('T')[0];
-                } catch (e) { console.error("Date parsing error:", e); }
-            }
-
-            lines.forEach(line => {
-                const priceRegex = /\$([0-9,]+\.[0-9]{2})/;
-                if (priceRegex.test(line)) {
-                    const priceMatch = line.match(priceRegex);
-                    const cost = parseFloat(priceMatch[1].replace(',', ''));
-
-                    if (line.toLowerCase().includes('total') || line.toLowerCase().includes('shipping') || line.toLowerCase().includes('tax')) {
-                        return;
-                    }
-
-                    let cleanText = line.replace(priceRegex, '')
-                                        .replace(/^\d+\s*x\s*/i, '')
-                                        .trim();
-                    
-                    const knownBrands = ['Cornell & Diehl', 'G.L. Pease', 'Seattle Pipe Club', 'Samuel Gawith', 'Gawith, Hoggarth & Co.', 'Mac Baren', 'Peterson', 'Davidoff', 'Capstan', 'McClelland', 'Esoterica', 'Germain'];
-                    let brand = 'Unknown Brand';
-                    let blend = cleanText;
-
-                    const foundBrand = knownBrands.find(b => cleanText.includes(b));
-                    if (foundBrand) {
-                        brand = foundBrand;
-                        blend = cleanText.replace(foundBrand, '').trim();
-                    } else {
-                        const parts = cleanText.split(' ');
-                        if (parts.length > 1) {
-                            brand = parts[0];
-                            blend = parts.slice(1).join(' ');
-                        }
-                    }
-
-                    blend = blend.replace(/(\d+(\.\d+)?\s?oz|\d+g)/gi, '').replace(/-\s*$/, '').trim();
-                    
-                    const type = line.toLowerCase().includes('bulk') ? 'Bulk' : 'Tin';
-                    let weight = 1.76; 
-                    if (line.toLowerCase().includes('8oz') || line.toLowerCase().includes('8 oz')) weight = 8;
-                    else if (line.toLowerCase().includes('2oz') || line.toLowerCase().includes('2 oz')) weight = 2;
-                    else if (line.toLowerCase().includes('100g')) weight = 3.5;
-
-                    if (blend.length > 2) { 
-                        foundItems.push({
-                            brand,
-                            blend,
-                            cost,
-                            purchaseDate: detectedDate,
-                            type,
-                            weightOz: weight,
-                            source: 'Email Import',
-                            notes: 'Parsed from receipt text'
-                        });
-                    }
+        const getSortedItems = () => {
+            return [...items].sort((a, b) => {
+                let valA = a[sortConfig.key];
+                let valB = b[sortConfig.key];
+                if (sortConfig.key === 'value') {
+                    valA = calculateEstValue(a);
+                    valB = calculateEstValue(b);
                 }
+                return sortConfig.direction === 'asc' ? 
+                    (valA > valB ? 1 : -1) : (valA < valB ? 1 : -1);
             });
-
-            return foundItems;
         };
 
-        const parseListText = (text) => {
-            const lines = text.trim().split('\n');
-            if (lines.length < 2) return [];
-
-            const firstLine = lines[0];
-            const commaCount = (firstLine.match(/,/g) || []).length;
-            const tabCount = (firstLine.match(/\t/g) || []).length;
-            const delimiter = commaCount >= tabCount && commaCount > 0 ? ',' : '\t';
-
-            const headers = firstLine.split(delimiter).map(h => h.trim().toLowerCase().replace(/[^a-z0-9]/g, ''));
-
-            const headerMap = {
-                'brand': 'brand', 'blend': 'blend', 'tobaccotype': 'type', 'type': 'type',
-                'weightoz': 'weightOz', 'weight': 'weightOz', 'oz': 'weightOz',
-                'cost': 'cost', 'price': 'cost', 'purchasedate': 'purchaseDate',
-                'date': 'purchaseDate', 'notes': 'notes',
-            };
-
-            const columnIndices = {};
-            headers.forEach((h, index) => {
-                if (headerMap[h]) {
-                    columnIndices[headerMap[h]] = index;
-                }
-            });
-
-            const parsedItems = [];
-            const today = new Date().toISOString().split('T')[0];
-
-            for (let i = 1; i < lines.length; i++) {
-                const line = lines[i];
-                if (!line.trim()) continue;
-
-                const values = line.split(delimiter).map(v => v.trim());
-                
-                const item = {
-                    source: 'Spreadsheet Import',
-                    id: generateId(),
-                };
-
-                const getVal = (key) => {
-                    const index = columnIndices[key];
-                    return index !== undefined && values.length > index ? values[index] : null;
-                };
-
-                item.brand = getVal('brand') || undefined;
-                item.blend = getVal('blend') || undefined;
-                item.notes = getVal('notes') || undefined;
-                
-                const rawType = getVal('type')?.toLowerCase();
-                item.type = (rawType === 'bulk' || rawType === 'tin') ? (rawType === 'bulk' ? 'Bulk' : 'Tin') : 'Tin';
-
-                const rawWeight = parseFloat(getVal('weightOz')?.replace(/[^0-9.]/g, '') || '');
-                item.weightOz = !isNaN(rawWeight) && rawWeight > 0 ? rawWeight : 1.76;
-
-                const rawCost = parseFloat(getVal('cost')?.replace(/[^0-9$.]/g, '') || '');
-                item.cost = !isNaN(rawCost) && rawCost >= 0 ? rawCost : 0;
-                
-                const rawDate = getVal('purchaseDate');
-                if (rawDate) {
-                    try {
-                        const d = new Date(rawDate);
-                        item.purchaseDate = !isNaN(d.getTime()) ? d.toISOString().split('T')[0] : today;
-                    } catch (e) {
-                        item.purchaseDate = today;
-                    }
-                } else {
-                        item.purchaseDate = today;
-                }
-
-                if (item.brand && item.blend && item.cost >= 0) {
-                    parsedItems.push(item);
-                }
-            }
-
-            return parsedItems;
-        };
-
-        // --- View Rendering ---
-
-        const navItems = [
-            { tab: 'dashboard', label: 'Dashboard', icon: 'PieChart' },
-            { tab: 'inventory', label: 'Inventory', icon: 'Wallet' },
-            { tab: 'add', label: 'Add', icon: 'Plus' },
-            { tab: 'sync', label: 'Sync', icon: 'RefreshCw' },
-        ];
-
-        const getStats = () => {
-            let totalSpent = 0;
-            let totalValue = 0;
-            let totalWeight = 0;
-
-            items.forEach(item => {
-                totalSpent += item.cost;
-                totalValue += calculateEstValue(item);
-                totalWeight += item.weightOz;
-            });
-
-            return { totalSpent, totalValue, totalWeight };
-        };
-
-        // Renders the Lucide icon using the data-lucide attribute, relying on lucide.createIcons() to render the SVG after injection.
-        const renderIcon = (name, size = 24, className = "") => {
-             // We use a span element with data-lucide attribute.
-            return `<span 
-                        data-lucide="${name}" 
-                        data-lucide-size="${size}" 
-                        class="lucide ${className}"
-                        style="width: ${size}px; height: ${size}px; min-width: ${size}px; min-height: ${size}px;"
-                    ></span>`;
-        };
-
-        const renderStatCard = (iconName, label, value, subValue, trend) => {
-            return `
-                <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 flex items-start space-x-4">
-                    <div class="p-3 bg-slate-100 rounded-lg text-slate-600">
-                        ${renderIcon(iconName, 24)}
-                    </div>
-                    <div>
-                        <p class="text-sm font-medium text-slate-500">${label}</p>
-                        <h3 class="text-2xl font-bold text-slate-800">${value}</h3>
-                        ${subValue ? `<p class="text-xs text-slate-400 mt-1">${subValue}</p>` : ''}
-                        ${trend ? `
-                            <div class="flex items-center mt-1 text-emerald-600 text-xs font-medium">
-                                ${renderIcon('TrendingUp', 12, 'mr-1')}
-                                ${trend}
-                            </div>
-                        ` : ''}
-                    </div>
-                </div>
-            `;
-        };
-
+        // --- Main Render Function (Add Chart Canvas to Dashboard) ---
+        // (Simplified for brevity - ensure this replaces your existing renderDashboard)
         const renderDashboard = () => {
             const stats = getStats();
             return `
-                <div class="space-y-6 animate-in slide-in-from-bottom-4 duration-300">
+                <div class="space-y-6 animate-in slide-in-from-bottom-4">
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                         ${renderStatCard('Wallet', 'Portfolio Value', `$${stats.totalValue.toFixed(2)}`, null, `+$${(stats.totalValue - stats.totalSpent).toFixed(2)} gain`)}
-                        ${renderStatCard('Scale', 'Total Weight', `${(stats.totalWeight / 16).toFixed(2)} lbs`, `${stats.totalWeight.toFixed(1)} oz`, null)}
-                        ${renderStatCard('TrendingUp', 'Total Spent', `$${stats.totalSpent.toFixed(2)}`, null, null)}
-                    </div>
-
-                    <div class="grid grid-cols-2 gap-4 md:hidden"> 
-                        <button 
-                            onclick="setActiveTabAndRender('sync')"
-                            class="p-4 bg-gradient-to-br from-indigo-500 to-indigo-600 rounded-xl text-white shadow-md hover:shadow-lg transition flex flex-col items-center justify-center space-y-2"
-                        >
-                            ${renderIcon('RefreshCw', 24)}
-                            <span class="font-medium">Sync Receipts</span>
-                        </button>
-                        <button 
-                            onclick="setActiveTabAndRender('add')"
-                            class="p-4 bg-gradient-to-br from-amber-700 to-amber-800 rounded-xl text-white shadow-md hover:shadow-lg transition flex flex-col items-center justify-center space-y-2"
-                        >
-                            ${renderIcon('Plus', 24)}
-                            <span class="font-medium">Manual Entry</span>
-                        </button>
-                    </div>
-
-                    <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-                        <div class="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-                            <h3 class="font-semibold text-slate-800">Recent Additions</h3>
-                            <button onclick="setActiveTabAndRender('inventory')" class="text-sm text-indigo-600 hover:text-indigo-800 font-medium">View All</button>
+                        <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 flex items-center justify-between">
+                            <div>
+                                <p class="text-sm font-medium text-slate-500">Brand Mix</p>
+                                <h3 class="text-xl font-bold">${Object.keys(items.reduce((acc, i) => ({...acc, [i.brand]:1}), {})).length} Brands</h3>
+                            </div>
+                            <div class="w-16 h-16"><canvas id="brandChart"></canvas></div>
                         </div>
-                        <div class="divide-y divide-slate-100">
-                            ${items.slice(0, 3).map(item => `
-                                <div onclick="setSelectedItemAndRender('${item.id}')" class="p-4 hover:bg-slate-50 cursor-pointer flex justify-between items-center transition">
-                                    <div>
-                                        <p class="font-medium text-slate-800">${item.brand}</p>
-                                        <p class="text-sm text-slate-500">${item.blend}</p>
-                                    </div>
-                                    <div class="text-right">
-                                        <p class="font-medium text-emerald-600">$${calculateEstValue(item).toFixed(2)}</p>
-                                        <p class="text-xs text-slate-400">${getAgeString(item.purchaseDate)} old</p>
-                                    </div>
-                                </div>
-                            `).join('')}
-                        </div>
+                        ${renderStatCard('Scale', 'Total Weight', `${(stats.totalWeight / 16).toFixed(2)} lbs`)}
                     </div>
-                </div>
+                    </div>
             `;
         };
 
-        const renderInventory = () => {
-            // Updated filtering logic to include brand, blend, and type
-            const filteredItems = items.filter(item => {
-                const query = searchQuery.toLowerCase();
-                return item.brand.toLowerCase().includes(query) || 
-                       item.blend.toLowerCase().includes(query) ||
-                       item.type.toLowerCase().includes(query); // Search by 'Tin' or 'Bulk'
-            });
-
-            return `
-                <div class="space-y-4 animate-in fade-in duration-300">
-                    <div class="flex space-x-2">
-                        <div class="relative flex-1">
-                            ${renderIcon('Search', 20, 'absolute left-3 top-3 text-slate-400')}
-                            <input 
-                                type="text" 
-                                placeholder="Search brand, blend, or type (Tin/Bulk)..." 
-                                value="${searchQuery}"
-                                oninput="setSearchQueryAndRender(this.value)"
-                                class="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 transition"
-                            />
-                        </div>
-                        <button class="bg-white p-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50">
-                            ${renderIcon('Filter', 20)}
-                        </button>
-                    </div>
-
-                    <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-                        <table class="w-full text-left">
-                            <thead class="bg-slate-50 border-b border-slate-200">
-                                <tr>
-                                    <th class="px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">Blend</th>
-                                    <th class="px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider hidden sm:table-cell">Age</th>
-                                    <th class="px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider text-right">Value</th>
-                                </tr>
-                            </thead>
-                            <tbody class="divide-y divide-slate-100">
-                                ${filteredItems.map(item => `
-                                    <tr onclick="setSelectedItemAndRender('${item.id}')" class="hover:bg-amber-50/50 cursor-pointer transition">
-                                        <td class="px-4 py-3">
-                                            <div class="font-medium text-slate-800">${item.blend}</div>
-                                            <div class="text-xs text-slate-500">${item.brand} • ${item.type}</div>
-                                        </td>
-                                        <td class="px-4 py-3 text-sm text-slate-600 hidden sm:table-cell">
-                                            ${getAgeString(item.purchaseDate)}
-                                        </td>
-                                        <td class="px-4 py-3 text-right">
-                                            <div class="font-medium text-emerald-600">$${calculateEstValue(item).toFixed(2)}</div>
-                                            <div class="text-xs text-slate-400">Paid $${item.cost.toFixed(2)}</div>
-                                        </td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                        ${filteredItems.length === 0 ? `
-                            <div class="p-8 text-center text-slate-500">
-                                No blends found matching your search.
-                            </div>
-                        ` : ''}
-                    </div>
-                </div>
-            `;
-        };
-
-        const renderAdd = () => {
-             return `
-                <div class="animate-in slide-in-from-right-4 duration-300">
-                    <div class="bg-white rounded-xl shadow-sm border border-slate-200 max-w-xl mx-auto overflow-hidden">
-                        <div class="bg-slate-50 p-4 border-b border-slate-200">
-                            <h2 class="font-bold text-lg text-slate-800">Add to Cellar</h2>
-                            <p class="text-sm text-slate-500">Manually enter a tin or bulk purchase.</p>
-                        </div>
-                        <form id="add-item-form" onsubmit="handleAddItem(event)" class="p-6 space-y-4">
-                            <div class="grid grid-cols-2 gap-4">
-                                <div class="space-y-1">
-                                    <label class="text-xs font-medium text-slate-500 uppercase">Brand</label>
-                                    <input 
-                                        required
-                                        class="w-full p-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 outline-none"
-                                        placeholder="e.g. G.L. Pease"
-                                        value="${newItem.brand}"
-                                        oninput="setNewItem('brand', this.value)"
-                                    />
-                                </div>
-                                <div class="space-y-1">
-                                    <label class="text-xs font-medium text-slate-500 uppercase">Blend Name</label>
-                                    <input 
-                                        required
-                                        class="w-full p-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 outline-none"
-                                        placeholder="e.g. Westminster"
-                                        value="${newItem.blend}"
-                                        oninput="setNewItem('blend', this.value)"
-                                    />
-                                </div>
-                            </div>
-
-                            <div class="grid grid-cols-3 gap-4">
-                                <div class="space-y-1">
-                                    <label class="text-xs font-medium text-slate-500 uppercase">Type</label>
-                                    <select 
-                                        class="w-full p-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-amber-500/20 outline-none bg-white"
-                                        onchange="setNewItem('type', this.value)"
-                                    >
-                                        <option value="Tin" ${newItem.type === 'Tin' ? 'selected' : ''}>Tin</option>
-                                        <option value="Bulk" ${newItem.type === 'Bulk' ? 'selected' : ''}>Bulk</option>
-                                    </select>
-                                </div>
-                                <div class="space-y-1">
-                                    <label class="text-xs font-medium text-slate-500 uppercase">Weight (oz)</label>
-                                    <input 
-                                        type="number" step="0.01"
-                                        class="w-full p-2.5 rounded-lg border border-slate-200 outline-none"
-                                        placeholder="1.76"
-                                        value="${newItem.weightOz}"
-                                        oninput="setNewItem('weightOz', parseFloat(this.value) || 0)"
-                                    />
-                                </div>
-                                <div class="space-y-1">
-                                    <label class="text-xs font-medium text-slate-500 uppercase">Cost ($)</label>
-                                    <input 
-                                        type="number" step="0.01"
-                                        class="w-full p-2.5 rounded-lg border border-slate-200 outline-none"
-                                        placeholder="0.00"
-                                        value="${newItem.cost}"
-                                        oninput="setNewItem('cost', parseFloat(this.value) || 0)"
-                                    />
-                                </div>
-                            </div>
-
-                            <div class="space-y-1">
-                                <label class="text-xs font-medium text-slate-500 uppercase">Purchase Date</label>
-                                <input 
-                                    type="date"
-                                    class="w-full p-2.5 rounded-lg border border-slate-200 outline-none"
-                                    value="${newItem.purchaseDate}"
-                                    onchange="setNewItem('purchaseDate', this.value)"
-                                />
-                            </div>
-
-                            <div class="space-y-1">
-                                <label class="text-xs font-medium text-slate-500 uppercase">Notes</label>
-                                <textarea 
-                                    class="w-full p-2.5 rounded-lg border border-slate-200 outline-none h-20 resize-none"
-                                    placeholder="Storage notes, batch codes, etc."
-                                    oninput="setNewItem('notes', this.value)"
-                                >${newItem.notes}</textarea>
-                            </div>
-
-                            <div class="pt-4 flex gap-3">
-                                <button type="button" onclick="setActiveTabAndRender('dashboard')" class="flex-1 py-3 text-slate-600 font-medium hover:bg-slate-50 rounded-lg transition">Cancel</button>
-                                <button type="submit" class="flex-1 py-3 bg-amber-700 hover:bg-amber-800 text-white font-bold rounded-lg shadow-md transition">Add Item</button>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-            `;
-        };
-
-        const renderSync = () => {
-             return `
-                <div class="animate-in fade-in duration-300">
-                    <div class="bg-white rounded-xl shadow-sm border border-slate-200 max-w-xl mx-auto text-center p-8 space-y-6">
-                        <div class="mx-auto w-16 h-16 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center">
-                            ${renderIcon('RefreshCw', 32, isSyncing ? "animate-spin" : "")}
-                        </div>
-                        
-                        <div class="space-y-2">
-                            <h2 class="text-2xl font-bold text-slate-800">Sync & Backup</h2>
-                            <p class="text-slate-500">Import purchases or export your current inventory data.</p>
-                        </div>
-
-                        <div class="space-y-3 text-left">
-                            <div class="p-4 border border-slate-200 rounded-xl flex items-center justify-between hover:bg-slate-50 transition cursor-pointer" onclick="handleSimulateSync()">
-                                <div class="flex items-center space-x-3">
-                                    <div class="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 font-bold text-xs">G</div>
-                                    <span class="font-medium text-slate-700">Gmail / Outlook</span>
-                                </div>
-                                <span class="text-xs bg-slate-100 text-slate-500 px-2 py-1 rounded">Simulate</span>
-                            </div>
-                            
-                            <div 
-                                onclick="setShowListImportModal(true)"
-                                class="p-4 border-2 border-dashed border-slate-300 rounded-xl flex items-center justify-center hover:border-indigo-500 hover:bg-indigo-50 transition cursor-pointer group"
-                            >
-                                <div class="flex flex-col items-center py-2">
-                                    ${renderIcon('Database', 24, 'text-slate-400 group-hover:text-indigo-600 mb-2')}
-                                    <span class="font-medium text-slate-600 group-hover:text-indigo-800">Import Spreadsheet/List</span>
-                                    <span class="text-xs text-slate-400 mt-1">Accepts CSV or tab-separated data</span>
-                                </div>
-                            </div>
-
-                            <div 
-                                onclick="setShowReceiptModal(true)"
-                                class="p-4 border-2 border-dashed border-slate-300 rounded-xl flex items-center justify-center hover:border-amber-500 hover:bg-amber-50 transition cursor-pointer group"
-                            >
-                                <div class="flex flex-col items-center py-2">
-                                    ${renderIcon('FileText', 24, 'text-slate-400 group-hover:text-amber-600 mb-2')}
-                                    <span class="font-medium text-slate-600 group-hover:text-amber-800">Paste Email Receipt Text</span>
-                                    <span class="text-xs text-slate-400 mt-1">Extracts date, items, and cost from free text</span>
-                                </div>
-                            </div>
-
-                            <!-- Download Data Backup Button -->
-                            <div 
-                                onclick="exportToCsv()"
-                                class="p-4 border-2 border-dashed border-slate-300 rounded-xl flex items-center justify-center hover:border-emerald-500 hover:bg-emerald-50 transition cursor-pointer group"
-                            >
-                                <div class="flex flex-col items-center py-2">
-                                    ${renderIcon('Download', 24, 'text-slate-400 group-hover:text-emerald-600 mb-2')}
-                                    <span class="font-medium text-slate-600 group-hover:text-emerald-800">Download Data Backup (CSV)</span>
-                                    <span class="text-xs text-slate-400 mt-1">Saves all inventory to a local spreadsheet file</span>
-                                </div>
-                            </div>
-                            
-                        </div>
-
-                        <div class="pt-4">
-                            ${syncStatus === 'success' ? `
-                                <div class="p-3 bg-emerald-50 text-emerald-700 rounded-lg flex items-center justify-center animate-in zoom-in">
-                                    ${renderIcon('CheckCircle2', 20, 'mr-2')}
-                                    Successfully imported items!
-                                </div>
-                            ` : `
-                                <button 
-                                    onclick="handleSimulateSync()"
-                                    ${isSyncing ? 'disabled' : ''}
-                                    class="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md transition disabled:opacity-50 disabled:cursor-not-allowed"
-                                >
-                                    ${isSyncing ? 'Scanning Accounts...' : 'Run Auto-Sync (Simulated)'}
-                                </button>
-                            `}
-                            <p class="mt-4 text-xs text-slate-400">
-                                ${renderIcon('AlertCircle', 12, 'inline mr-1')}
-                                Auto-sync is simulated. Use paste functions for real imports.
-                            </p>
-                        </div>
-                    </div>
-                </div>
-            `;
-        };
-
-        const renderContent = () => {
-            switch (activeTab) {
-                case 'inventory': return renderInventory();
-                case 'add': return renderAdd();
-                case 'sync': return renderSync();
-                case 'dashboard':
-                default: return renderDashboard();
-            }
-        };
-
-        const renderDetailModal = () => {
-            if (!selectedItem) return '';
-            const item = selectedItem;
-            const estValue = calculateEstValue(item);
-            const gain = estValue - item.cost;
-            const gainPercent = item.cost > 0 ? ((gain / item.cost) * 100).toFixed(1) : '—';
-
-            return `
-                <div class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm" onclick="setSelectedItemAndRender(null)">
-                    <div class="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200" onclick="event.stopPropagation()">
-                        <div class="h-32 bg-gradient-to-r from-amber-700 to-amber-900 flex items-end p-6 relative">
-                            <button onclick="setSelectedItemAndRender(null)" class="absolute top-4 right-4 text-white/80 hover:text-white bg-black/20 hover:bg-black/40 rounded-full p-2 transition">
-                                ${renderIcon('X', 24)}
-                            </button>
-                            <div class="text-white">
-                                <h2 class="text-3xl font-bold tracking-tight">${item.brand}</h2>
-                                <p class="text-amber-100 text-lg opacity-90">${item.blend}</p>
-                            </div>
-                        </div>
-                        
-                        <div class="p-6 space-y-6 custom-scrollbar max-h-[70vh] overflow-y-auto">
-                            <div class="grid grid-cols-2 gap-4">
-                                <div class="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                                    <p class="text-xs uppercase tracking-wide text-slate-500 font-semibold mb-1">Estimated Value</p>
-                                    <p class="text-2xl font-bold text-emerald-600">$${estValue.toFixed(2)}</p>
-                                    <p class="text-xs ${gain >= 0 ? 'text-emerald-600' : 'text-red-500'} font-medium">
-                                        ${gainPercent}% appreciation
-                                    </p>
-                                </div>
-                                <div class="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                                    <p class="text-xs uppercase tracking-wide text-slate-500 font-semibold mb-1">Cellar Age</p>
-                                    <p class="text-2xl font-bold text-slate-700">${getAgeString(item.purchaseDate)}</p>
-                                    <p class="text-xs text-slate-400">Purchased ${formatDate(item.purchaseDate)}</p>
-                                </div>
-                            </div>
-
-                            <div class="space-y-3">
-                                <h4 class="text-sm font-semibold text-slate-900 flex items-center">
-                                    ${renderIcon('TrendingUp', 16, 'mr-2 text-slate-400')}
-                                    Market References
-                                </h4>
-                                <div class="text-sm text-slate-600 bg-amber-50 p-4 rounded-lg border border-amber-100">
-                                    <p class="mb-2">Valuation estimates derived from historical data found on:</p>
-                                    <div class="flex gap-2 flex-wrap">
-                                        ${['TinBids.com', 'Pipestuds.com', 'eBay.com'].map(site => `
-                                            <span class="inline-flex items-center px-2 py-1 bg-white border border-amber-200 rounded text-amber-800 text-xs font-medium">
-                                                ${renderIcon('ExternalLink', 10, 'mr-1')} ${site}
-                                            </span>
-                                        `).join('')}
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div class="grid grid-cols-2 gap-y-4 text-sm border-t border-slate-100 pt-4">
-                                <div>
-                                    <span class="block text-slate-400 text-xs">Type</span>
-                                    <span class="font-medium text-slate-700">${item.type}</span>
-                                </div>
-                                <div>
-                                    <span class="block text-slate-400 text-xs">Quantity/Weight</span>
-                                    <span class="font-medium text-slate-700">${item.weightOz} oz</span>
-                                </div>
-                                <div>
-                                    <span class="block text-slate-400 text-xs">Cost Basis</span>
-                                    <span class="font-medium text-slate-700">$${item.cost.toFixed(2)}</span>
-                                </div>
-                                <div>
-                                    <span class="block text-slate-400 text-xs">Source</span>
-                                    <span class="font-medium text-slate-700">${item.source || 'N/A'}</span>
-                                </div>
-                            </div>
-                            
-                            ${item.notes ? `
-                                <div class="bg-slate-50 p-3 rounded-lg text-sm text-slate-600 italic">
-                                    "${item.notes}"
-                                </div>
-                            ` : ''}
-                        </div>
-                        
-                        <div class="bg-slate-50 p-4 flex justify-end">
-                            <button onclick="setSelectedItemAndRender(null)" class="px-4 py-2 bg-white border border-slate-300 rounded-lg text-slate-700 font-medium hover:bg-slate-50 shadow-sm transition">
-                                Close
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            `;
-        };
-
-        const renderReceiptModal = () => {
-            if (!showReceiptModal) return '';
-            
-            let parsedPreview = [];
-            let importCount = 0;
-            if (pasteText.trim()) {
-                const items = parseReceiptText(pasteText);
-                parsedPreview = items.slice(0, 5);
-                importCount = items.length;
-            }
-
-            return `
-                <div class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm" onclick="setShowReceiptModalAndRender(false)">
-                    <div class="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200" onclick="event.stopPropagation()">
-                        <div class="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
-                            <h3 class="font-bold text-slate-800 flex items-center">
-                                ${renderIcon('FileText', 18, 'mr-2 text-amber-600')}
-                                Import from Email Receipt
-                            </h3>
-                            <button onclick="setShowReceiptModalAndRender(false)" class="text-slate-400 hover:text-slate-600">
-                                ${renderIcon('X', 20)}
-                            </button>
-                        </div>
-                        <div class="p-6 space-y-4">
-                            <p class="text-sm text-slate-600">
-                                Copy the text from your email receipt (including date and prices) and paste it below. We'll try to extract the details.
-                            </p>
-                            <textarea 
-                                id="receipt-textarea"
-                                class="w-full h-40 p-3 border border-slate-200 rounded-lg text-sm font-mono focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none resize-none custom-scrollbar"
-                                placeholder="Order Date: 12/01/2023\n\n1 x G.L. Pease Westminster - $14.50\n1 x Cornell & Diehl Haunted Bookshop 8oz - $28.00"
-                                oninput="setPasteTextAndRender(this.value)"
-                            >${pasteText}</textarea>
-
-                            <!-- Preview Section -->
-                            ${importCount > 0 ? `
-                                <div class="p-4 bg-slate-50 border border-slate-200 rounded-lg">
-                                    <h4 class="text-sm font-semibold mb-2 text-slate-700">Preview (${importCount} items detected)</h4>
-                                    ${parsedPreview.map((item, index) => `
-                                        <div key="${index}" class="text-xs text-slate-600 flex justify-between border-b last:border-b-0 py-1">
-                                            <span>${item.brand || 'Unknown'} - ${item.blend || 'Unknown'}</span>
-                                            <span class="font-medium text-emerald-600">$${item.cost ? item.cost.toFixed(2) : '0.00'}</span>
-                                        </div>
-                                    `).join('')}
-                                    ${importCount > parsedPreview.length ? `<p class="text-xs text-slate-400 mt-2">... and ${importCount - parsedPreview.length} more.</p>` : ''}
-                                </div>
-                            ` : ''}
-
-                            <div class="flex justify-end gap-2">
-                                <button 
-                                    onclick="setShowReceiptModalAndRender(false)" 
-                                    class="px-4 py-2 text-slate-600 font-medium hover:bg-slate-50 rounded-lg"
-                                >
-                                    Cancel
-                                </button>
-                                <button 
-                                    onclick="handleReceiptImport()"
-                                    ${!pasteText.trim() || importCount === 0 ? 'disabled' : ''}
-                                    class="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                                >
-                                    Parse & Import
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            `;
-        };
-
-        const renderListImportModal = () => {
-            if (!showListImportModal) return '';
-            
-            let parsedPreview = [];
-            let importCount = 0;
-            if (pasteText.trim()) {
-                const items = parseListText(pasteText);
-                parsedPreview = items.slice(0, 5);
-                importCount = items.length;
-            }
-
-            return `
-                <div class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm" onclick="setShowListImportModalAndRender(false)">
-                    <div class="bg-white w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200" onclick="event.stopPropagation()">
-                        <div class="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
-                            <h3 class="font-bold text-slate-800 flex items-center">
-                                ${renderIcon('Database', 18, 'mr-2 text-indigo-600')}
-                                Import Spreadsheet List
-                            </h3>
-                            <button onclick="setShowListImportModalAndRender(false)" class="text-slate-400 hover:text-slate-600">
-                                ${renderIcon('X', 20)}
-                            </button>
-                        </div>
-                        <div class="p-6 space-y-4">
-                            <p class="text-sm text-slate-600">
-                                Copy columns directly from your spreadsheet (Excel, Google Sheets) and paste them below. 
-                                Include a header row (e.g., Brand, Blend, WeightOz, Cost, PurchaseDate).
-                            </p>
-                            <textarea 
-                                id="list-textarea"
-                                class="w-full h-40 p-3 border border-slate-200 rounded-lg text-sm font-mono focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-none custom-scrollbar"
-                                placeholder="Brand\tBlend\tType\tWeightOz\tCost\tPurchaseDate\nMcClelland\tNavy Flake\tTin\t3.5\t15.00\t2016-11-20\nG.L. Pease\tGaslight\tTin\t2\t14.99\t2023-01-05"
-                                oninput="setPasteTextAndRender(this.value, 'list')"
-                            >${pasteText}</textarea>
-
-                            ${importCount > 0 ? `
-                                <div class="p-4 bg-slate-50 border border-slate-200 rounded-lg">
-                                    <h4 class="text-sm font-semibold mb-2 text-slate-700">Preview (${importCount} items detected)</h4>
-                                    ${parsedPreview.map((item, index) => `
-                                        <div key="${index}" class="text-xs text-slate-600 flex justify-between border-b last:border-b-0 py-1">
-                                            <span>${item.brand || 'Unknown'} - ${item.blend || 'Unknown'}</span>
-                                            <span class="font-medium text-emerald-600">$${item.cost ? item.cost.toFixed(2) : '0.00'}</span>
-                                        </div>
-                                    `).join('')}
-                                    ${importCount > parsedPreview.length ? `<p class="text-xs text-slate-400 mt-2">... and ${importCount - parsedPreview.length} more.</p>` : ''}
-                                </div>
-                            ` : ''}
-
-                            <div class="flex justify-end gap-2">
-                                <button 
-                                    onclick="setShowListImportModalAndRender(false)" 
-                                    class="px-4 py-2 text-slate-600 font-medium hover:bg-slate-50 rounded-lg"
-                                >
-                                    Cancel
-                                </button>
-                                <button 
-                                    onclick="handleListImport()"
-                                    ${!pasteText.trim() || importCount === 0 ? 'disabled' : ''}
-                                    class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                                >
-                                    Import ${importCount} Items
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            `;
-        };
-
-        const renderApp = () => {
-            const appContainer = document.getElementById('app-container');
-
-            appContainer.innerHTML = `
-                <div class="min-h-screen bg-slate-50 font-sans text-slate-900 pb-20 md:pb-0">
-                    
-                    <!-- Top Navigation / Header -->
-                    <header class="bg-white border-b border-slate-200 sticky top-0 z-10 px-4 py-4 shadow-sm">
-                        <div class="max-w-4xl mx-auto flex justify-between items-center">
-                            <div class="flex items-center space-x-2">
-                                <div class="bg-amber-700 text-white p-2 rounded-lg">
-                                    ${renderIcon('PieChart', 20)}
-                                </div>
-                                <div>
-                                    <h1 class="text-xl font-bold text-slate-900 leading-none">Cellar<span class="text-amber-700">Book</span></h1>
-                                    <p class="text-xs text-slate-500">Inventory & Valuation</p>
-                                </div>
-                            </div>
-                        </div>
-                    </header>
-
-                    <!-- Desktop Navigation Tabs (Visible md and up) -->
-                    <div class="hidden md:flex max-w-4xl mx-auto px-6 pt-4 space-x-6 border-b border-slate-200">
-                        ${navItems.map(({ tab, label, icon }) => `
-                            <button
-                                onclick="setActiveTabAndRender('${tab}')"
-                                class="flex items-center space-x-2 pb-3 px-1 transition-all border-b-2 font-semibold text-sm ${
-                                activeTab === tab
-                                    ? 'border-amber-700 text-amber-700'
-                                    : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700'
-                                }"
-                            >
-                                ${renderIcon(icon, 18)}
-                                <span>${label}</span>
-                            </button>
-                        `).join('')}
-                    </div>
-
-                    <!-- Main Content Area -->
-                    <main class="max-w-4xl mx-auto p-4 md:p-6 space-y-6">
-                        ${renderContent()}
-                    </main>
-
-                    <!-- Mobile Bottom Navigation (Visible below md breakpoint) -->
-                    <nav class="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 shadow-2xl md:hidden z-20">
-                        <div class="flex justify-around items-center h-16">
-                            ${navItems.map(({ tab, label, icon }) => `
-                                <button
-                                    onclick="setActiveTabAndRender('${tab}')"
-                                    class="flex flex-col items-center justify-center p-2 transition-colors ${
-                                        activeTab === tab
-                                            ? 'text-amber-700'
-                                            : 'text-slate-500 hover:text-amber-600'
-                                    }"
-                                >
-                                    ${renderIcon(icon, 24)}
-                                    <span class="text-xs mt-1 font-medium">${label}</span>
-                                </button>
-                            `).join('')}
-                        </div>
-                    </nav>
-
-                </div>
-                ${renderDetailModal()}
-                ${renderReceiptModal()}
-                ${renderListImportModal()}
-            `;
-            // Re-run Lucide to render icons in newly injected HTML
-            if (typeof lucide !== 'undefined') {
-                lucide.createIcons();
-            }
-        };
-
-
-        // --- State Mutators & Re-render Triggers ---
-
-        const setActiveTabAndRender = (tab) => {
-            activeTab = tab;
-            renderApp();
-            saveState();
-        };
-
-        const setSearchQueryAndRender = (query) => {
-            searchQuery = query;
-            renderApp();
-        };
-
-        const setNewItem = (key, value) => {
-            // This function intentionally does not call renderApp() to prevent input lag.
-            // Values are updated in the global 'newItem' state object.
-            newItem[key] = value;
-        };
-
-        const setSelectedItemAndRender = (itemId) => {
-            selectedItem = items.find(item => item.id === itemId) || null;
-            renderApp();
-        };
-
-        const setShowReceiptModalAndRender = (isVisible) => {
-            showReceiptModal = isVisible;
-            if (!isVisible) pasteText = '';
-            renderApp();
-        };
-
-        const setShowListImportModalAndRender = (isVisible) => {
-            showListImportModal = isVisible;
-            if (!isVisible) pasteText = '';
-            renderApp();
-        };
-
-        const setPasteTextAndRender = (text) => {
-            pasteText = text;
-            renderApp();
-        };
-
-
-        // --- Action Handlers ---
-
-        const handleAddItem = (e) => {
-            e.preventDefault();
-            if (!newItem.brand || !newItem.blend || newItem.cost === undefined) return;
-
-            const item = {
-                id: generateId(),
-                brand: newItem.brand,
-                blend: newItem.blend,
-                type: newItem.type,
-                weightOz: parseFloat(newItem.weightOz),
-                purchaseDate: newItem.purchaseDate,
-                cost: parseFloat(newItem.cost),
-                source: 'Manual',
-                notes: newItem.notes
-            };
-
-            items.unshift(item);
-            newItem = {
-                type: 'Tin',
-                purchaseDate: new Date().toISOString().split('T')[0],
-                source: 'Manual',
-                brand: '',
-                blend: '',
-                weightOz: 1.76,
-                cost: 0,
-                notes: ''
-            };
-            activeTab = 'inventory';
-            renderApp();
-            saveState();
-        };
-
-        const handleReceiptImport = () => {
-            if (!pasteText.trim()) return;
-            const newItems = parseReceiptText(pasteText);
-            
-            const itemsWithIds = newItems.map(item => ({
-                ...item,
-                id: generateId(),
-                brand: item.brand || 'Unknown',
-                blend: item.blend || 'Unknown',
-                type: item.type || 'Tin',
-                weightOz: item.weightOz || 1.76,
-                purchaseDate: item.purchaseDate || new Date().toISOString().split('T')[0],
-                cost: item.cost || 0,
-                source: 'Email Import',
-                notes: item.notes || ''
-            }));
-
-            items = [...itemsWithIds, ...items];
-            pasteText = '';
-            showReceiptModal = false;
-            activeTab = 'inventory';
-            renderApp();
-            saveState();
-        };
-
-        const handleListImport = () => {
-            if (!pasteText.trim()) return;
-            const newItems = parseListText(pasteText);
-
-            const itemsWithRequiredFields = newItems.map(item => ({
-                id: generateId(),
-                brand: item.brand || 'Unknown Brand',
-                blend: item.blend || 'Unknown Blend',
-                type: item.type || 'Tin',
-                weightOz: item.weightOz || 1.76,
-                purchaseDate: item.purchaseDate || new Date().toISOString().split('T')[0],
-                cost: item.cost || 0,
-                source: 'Spreadsheet Import',
-                notes: item.notes || ''
-            }));
-
-            if (itemsWithRequiredFields.length > 0) {
-                items = [...itemsWithRequiredFields, ...items];
-                pasteText = '';
-                showListImportModal = false;
-                activeTab = 'inventory';
-                renderApp();
-                saveState();
-            }
-        };
-
-        const handleSimulateSync = () => {
-            if (isSyncing) return;
-            isSyncing = true;
-            renderApp();
-
-            setTimeout(() => {
-                const mockSyncedItems = [
-                    { id: generateId(), brand: 'Seattle Pipe Club', blend: 'Plum Pudding', type: 'Tin', weightOz: 2, purchaseDate: '2023-11-15', cost: 15.25, source: 'Email Receipt', notes: 'Imported from order #99281' },
-                    { id: generateId(), brand: 'Cornell & Diehl', blend: 'Haunted Bookshop', type: 'Bulk', weightOz: 8, purchaseDate: '2023-11-15', cost: 28.00, source: 'Email Receipt', notes: 'Bulk bag' }
-                ];
-                
-                items = [...mockSyncedItems, ...items];
-                isSyncing = false;
-                syncStatus = 'success';
-                saveState();
-                renderApp();
-
-                setTimeout(() => {
-                    syncStatus = 'idle';
-                    renderApp();
-                }, 3000);
-
-            }, 2000);
-        };
-
-        // --- Initial Load ---
+        // Initialized with Dark Mode check
         window.onload = () => {
+            if (darkMode) document.documentElement.classList.add('dark');
             loadState();
             renderApp();
-        };
-        
-        // --- Automatic Backup on Unload ---
-        // IMPORTANT: Modern browsers often block file downloads initiated during the 
-        // 'beforeunload' event for security reasons, as it's not a direct user action.
-        // While we call exportToCsv here, it might not always trigger the download 
-        // depending on the browser environment. Data is always saved to localStorage via saveState().
-        window.onbeforeunload = () => {
-            saveState(); // Ensure last-minute save is done
-            exportToCsv(); // Attempt to trigger download
+            renderCharts();
         };
 
+        // (Rest of your existing functions like saveState, calculateEstValue, etc.)
     </script>
 </body>
 </html>
